@@ -37,6 +37,52 @@ def traduci_sync(text: str) -> str:
     low = text.strip().lower()
     if low in EMERGENZA:
         return EMERGENZA[low]
+    
+    # FIX: Google PRIMA per testi lunghi (4000 chars, più stabile)
+    try:
+        from deep_translator import GoogleTranslator
+        # Google gestisce bene testi lunghi
+        result = GoogleTranslator(source='en', target='it').translate(text[:4000])
+        if result and result.strip() and result.lower() != low:
+            # Filtra se Google ritorna stesso inglese o errore
+            if "QUERY LENGTH" not in result.upper() and "MAX ALLOWED" not in result.upper():
+                print(f"[Google OK] {text[:30]}... -> {result[:30]}...")
+                return result
+    except Exception as e:
+        print(f"[Google fail] {e}")
+
+    # MyMemory come backup per testi corti
+    try:
+        q = text[:400]
+        r = requests.get("https://api.mymemory.translated.net/get", params={"q": q, "langpair": "en|it", "de": "a@b.c"}, timeout=15)
+        if r.status_code == 200:
+            j = r.json()
+            t = j.get("responseData", {}).get("translatedText")
+            if t:
+                upper = t.upper()
+                if "QUERY LENGTH LIMIT EXCEEDED" not in upper and "MAX ALLOWED QUERY" not in upper and "MYMEMORY WARNING" not in upper:
+                    if t.strip() and t.lower() != low:
+                        print(f"[MyMemory OK] {text[:30]}... -> {t[:30]}...")
+                        return t
+    except Exception as e:
+        print(f"[MyMemory fail] {e}")
+
+    # Libre come ultimo tentativo
+    try:
+        from deep_translator import LibreTranslator
+        result = LibreTranslator(source='en', target='it').translate(text[:4000])
+        if result and result.lower() != low:
+            return result
+    except Exception as e:
+        print(f"[Libre fail] {e}")
+
+    # Se tutto fallisce, ritorna originale ma logga
+    print(f"[TRADUZIONE FALLITA] Ritorno originale: {text[:50]}")
+    return text
+
+    low = text.strip().lower()
+    if low in EMERGENZA:
+        return EMERGENZA[low]
     # MyMemory - limite 500 chars, usiamo 400 per sicurezza
     try:
         q = text[:400]  # FIX: prima era 900, MyMemory max 500

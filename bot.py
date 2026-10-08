@@ -143,6 +143,20 @@ async def traduci_stop(interaction: discord.Interaction):
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
-    print("Manca DISCORD_TOKEN!")
+    print("❌ Manca DISCORD_TOKEN! Controlla Environment Variables su Render")
+    print("⚠️ Flask resta attivo per UptimeRobot, ma bot Discord offline")
+    # Tieni vivo il processo per Render
+    import time
+    while True:
+        time.sleep(3600)
 else:
-    client.run(TOKEN)
+    try:
+        print(f"🚀 Avvio bot Discord...")
+        client.run(TOKEN)
+    except Exception as e:
+        print(f"❌ ERRORE DISCORD: {e}")
+        print("⚠️ Flask resta attivo, ma bot offline - controlla token")
+        import time
+        while True:
+            time.sleep(3600)
+

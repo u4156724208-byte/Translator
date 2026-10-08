@@ -100,23 +100,51 @@ async def on_message(message):
         return
     if "Translated from" in message.content:
         return
-    if not message.content.strip():
+    
+    # Estrae testo da content + embeds (per patch notes di DbD ecc)
+    orig = ""
+    if message.content and message.content.strip():
+        orig = message.content.strip()
+    elif message.embeds:
+        # Prendi titolo + descrizione + fields dagli embed
+        parts = []
+        for emb in message.embeds:
+            if emb.title:
+                parts.append(emb.title)
+            if emb.description:
+                parts.append(emb.description)
+            for f in emb.fields:
+                if f.name:
+                    parts.append(f.name)
+                if f.value:
+                    parts.append(f.value)
+        orig = "\n".join(parts).strip()
+    
+    if not orig or len(orig) < 2:
         return
+    
     try:
-        orig = message.content
-        if len(orig) < 2:
-            return
+        print(f"[AUTO] Traduco in #{message.channel.name}: {orig[:80]}...")
         if len(orig) > 400:
             chunks = [orig[i:i+400] for i in range(0, len(orig), 400)]
-            trad = "\n".join([traduci_sync(c) for c in chunks])
+            # Traduci ogni chunk e unisci
+            trad_parts = []
+            for c in chunks:
+                trad_parts.append(traduci_sync(c))
+            trad = "\n".join(trad_parts)
         else:
             trad = await asyncio.to_thread(traduci_sync, orig)
-        if trad and trad.lower() != orig.lower():
-            emb = discord.Embed(description=f"**{trad[:3500]}**", color=0x00ffcc)
-            emb.set_footer(text=f"Translated from #{message.channel.name} by BLACKOUT")
+        
+        if trad and trad.lower().strip() != orig.lower().strip():
+            # Taglia per limite embed Discord 4096
+            if len(trad) > 3500:
+                trad = trad[:3500] + "..."
+            emb = discord.Embed(description=f"**{trad}**", color=0x00ffcc)
+            emb.set_footer(text=f"Translated from #{message.channel.name} by BLACKOUT | /traduci_stop per fermare")
             await message.channel.send(embed=emb)
+            print(f"[AUTO] Tradotto!")
     except Exception as e:
-        print(f"Auto err {e}")
+        print(f"[AUTO] Errore: {e}")
 
 @tree.command(name="traduci", description="Traduci EN->IT o attiva auto")
 @app_commands.describe(testo="Testo da tradurre (vuoto=attiva auto)")

@@ -37,23 +37,30 @@ def traduci_sync(text: str) -> str:
     low = text.strip().lower()
     if low in EMERGENZA:
         return EMERGENZA[low]
-    # MyMemory
+    # MyMemory - limite 500 chars, usiamo 400 per sicurezza
     try:
-        r = requests.get("https://api.mymemory.translated.net/get", params={"q": text[:900], "langpair": "en|it"}, timeout=10)
+        q = text[:400]  # FIX: prima era 900, MyMemory max 500
+        r = requests.get("https://api.mymemory.translated.net/get", params={"q": q, "langpair": "en|it"}, timeout=10)
         if r.status_code == 200:
             j = r.json()
             t = j.get("responseData", {}).get("translatedText")
-            if t and "MYMEMORY WARNING" not in t and t.strip() and t.lower() != low:
-                return t
+            # Filtra errori MyMemory
+            if t:
+                upper = t.upper()
+                if "QUERY LENGTH LIMIT EXCEEDED" in upper or "MAX ALLOWED QUERY" in upper or "MYMEMORY WARNING" in upper:
+                    print(f"MyMemory limite superato, passo a Google")
+                elif t.strip() and t.lower() != low:
+                    return t
     except Exception as e:
         print(f"MyMemory fail: {e}")
-    # Google
+    # Google fallback - gestisce testi lunghi fino a 4000
     try:
         from deep_translator import GoogleTranslator
         return GoogleTranslator(source='en', target='it').translate(text[:4000])
     except Exception as e:
         print(f"Google fail: {e}")
         return text
+
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -99,8 +106,8 @@ async def on_message(message):
         orig = message.content
         if len(orig) < 2:
             return
-        if len(orig) > 900:
-            chunks = [orig[i:i+900] for i in range(0, len(orig), 900)]
+        if len(orig) > 400:
+            chunks = [orig[i:i+400] for i in range(0, len(orig), 400)]
             trad = "\n".join([traduci_sync(c) for c in chunks])
         else:
             trad = await asyncio.to_thread(traduci_sync, orig)
@@ -121,8 +128,8 @@ async def traduci(interaction: discord.Interaction, testo: str = None):
             save_auto(auto_channels)
             await interaction.followup.send(f"✅ Auto ATTIVATA in <#{interaction.channel.id}>! Usa /traduci_stop per fermare.", ephemeral=True)
             return
-        if len(testo) > 900:
-            chunks = [testo[i:i+900] for i in range(0, len(testo), 900)]
+        if len(testo) > 400:
+            chunks = [testo[i:i+400] for i in range(0, len(testo), 400)]
             finale = "\n".join([await asyncio.to_thread(traduci_sync, c) for c in chunks])
         else:
             finale = await asyncio.to_thread(traduci_sync, testo)

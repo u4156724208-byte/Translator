@@ -1,3 +1,4 @@
-discord.py
-deep-translator
-Flask
+    discord.py
+    deep-translator
+    Flask
+    requests

@@ -1,4 +1,4 @@
-import 【entity-discord¦canonical_name=discord】, os, threading
+import discord, os, threading
 from flask import Flask
 from googletrans import Translator
 
@@ -9,11 +9,12 @@ app = Flask('')
 @app.route('/')
 def home():
     return "BLACKOUT Translator Online"
+
 threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080), daemon=True).start()
 
-intents = 【entity-discord¦canonical_name=discord】.Intents.default()
+intents = discord.Intents.default()
 intents.message_content = True
-bot = 【entity-【entity-discord¦canonical_name=discord】¦canonical_name=【entity-discord¦canonical_name=discord】】.Client(intents=intents)
+bot = discord.Client(intents=intents)
 
 @bot.event
 async def on_ready():
@@ -45,11 +46,11 @@ async def on_message(message):
             description=tradotto.text,
             color=0x00D9FF
         )
-        nuovo_embed.set_author(name=f"【entity-Rockstar Games¦canonical_name=Rockstar Games】 #{message.channel.name}")
+        nuovo_embed.set_author(name=f"Rockstar Games #{message.channel.name}")
         nuovo_embed.set_footer(text=f"Translated from #{message.channel.name} by BLACKOUT Translator")
         embeds_finali = [nuovo_embed]
         if embed_orig and embed_orig.image:
-            img_embed = 【entity-discord¦canonical_name=discord】.Embed(color=0x00D9FF)
+            img_embed = discord.Embed(color=0x00D9FF)
             img_embed.set_image(url=embed_orig.image.url)
             embeds_finali.append(img_embed)
         await message.channel.send(embeds=embeds_finali)

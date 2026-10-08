@@ -4,15 +4,21 @@ from discord import app_commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 translator_en_it = None
-def init_translator():
-    global translator_en_it
+is_downloading = False
+
+def init_translator_background():
+    global translator_en_it, is_downloading
+    if is_downloading:
+        return
+    is_downloading = True
     try:
         from argostranslate import translate, package
+        print("Controllo pacchetto Argos...")
         installed = translate.get_installed_languages()
         en = next((l for l in installed if l.code == "en"), None)
         it = next((l for l in installed if l.code == "it"), None)
         if not en or not it or not en.get_translation(it):
-            print("Scarico pacchetto en->it Argos...")
+            print("Scarico pacchetto en->it Argos (30MB, una volta sola)...")
             package.update_package_index()
             available = package.get_available_packages()
             pkg = next((p for p in available if p.from_code == "en" and p.to_code == "it"), None)
@@ -29,19 +35,24 @@ def init_translator():
     except Exception as e:
         print(f"Argos non disponibile: {e}")
         translator_en_it = None
+    finally:
+        is_downloading = False
 
 def traduci_testo(text):
     if not text or len(text.strip()) < 2:
         return text
     if len(text) > 4000:
         text = text[:4000]
+    # 1. Offline se pronto
     try:
         if translator_en_it:
             result = translator_en_it.translate(text)
             if result:
+                print(f"Argos OK: {text[:30]} -> {result[:30]}")
                 return result
     except Exception as e:
-        print(f"Argos fallita: {e}")
+        print(f"Argos trad fallita: {e}")
+    # 2. Google diretto (veloce mentre Argos scarica)
     try:
         import requests, urllib.parse
         q = urllib.parse.quote(text)
@@ -51,13 +62,18 @@ def traduci_testo(text):
             data = r.json()
             trad = "".join([x[0] for x in data[0] if x[0]])
             if trad:
+                print(f"Google diretto OK")
                 return trad
     except Exception as e:
         print(f"Google fallito: {e}")
+    # 3. MyMemory
     try:
         from deep_translator import MyMemoryTranslator
-        return MyMemoryTranslator(source='en', target='it').translate(text)
-    except:
+        res = MyMemoryTranslator(source='en', target='it').translate(text)
+        print(f"MyMemory OK")
+        return res
+    except Exception as e:
+        print(f"Tutti i traduttori falliti: {e}")
         return text
 
 FILE_CANALE = "canali_auto.json"
@@ -75,11 +91,15 @@ def salva_canali(canali):
     with open(FILE_CANALE, "w") as f:
         js.dump(list(canali), f)
 canali_auto = carica_canali()
+
 app = Flask('')
 @app.route('/')
 def home():
-    return "BLACKOUT Translator Online - Argos Ready"
+    status = "PRONTO" if translator_en_it else "Download in corso..." if is_downloading else "Avvio..."
+    return f"BLACKOUT Translator Online - {status}"
+
 threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080), daemon=True).start()
+
 intents = discord.Intents.default()
 intents.message_content = True
 class MyBot(discord.Client):
@@ -87,15 +107,18 @@ class MyBot(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 bot = MyBot()
+
 @bot.event
 async def on_ready():
-    init_translator()
     print(f"Bot online {bot.user} - Auto: {canali_auto}")
+    # Avvia download in background senza bloccare
+    threading.Thread(target=init_translator_background, daemon=True).start()
     try:
         synced = await bot.tree.sync()
         print(f"Sync {len(synced)} comandi")
     except Exception as e:
         print(f"Errore sync: {e}")
+
 async def crea_embed_tradotto(testo_originale, channel_name, embed_orig=None):
     tradotto_text = traduci_testo(testo_originale)
     titolo = tradotto_text.split("\n\n")[0][:256] if "\n\n" in tradotto_text else tradotto_text[:256]
@@ -108,6 +131,7 @@ async def crea_embed_tradotto(testo_originale, channel_name, embed_orig=None):
         img_embed.set_image(url=embed_orig.image.url)
         embeds_finali.append(img_embed)
     return embeds_finali
+
 @bot.tree.command(name="traduci", description="Attiva traduzione automatica in questo canale e traduce l'ultimo post")
 @app_commands.describe(testo="Testo opzionale da tradurre subito")
 async def traduci(interaction: discord.Interaction, testo: str = None):
@@ -143,6 +167,7 @@ async def traduci(interaction: discord.Interaction, testo: str = None):
     except Exception as e:
         print(f"Errore /traduci: {e}")
         await interaction.followup.send(f"Errore: {e}")
+
 @bot.tree.command(name="traduci_stop", description="Disattiva traduzione automatica in questo canale")
 async def traduci_stop(interaction: discord.Interaction):
     if interaction.channel.id in canali_auto:
@@ -151,6 +176,7 @@ async def traduci_stop(interaction: discord.Interaction):
         await interaction.response.send_message(f"🛑 Auto DISATTIVATA in {interaction.channel.mention}.")
     else:
         await interaction.response.send_message("Auto non era attiva qui.", ephemeral=True)
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -176,4 +202,5 @@ async def on_message(message):
         await message.channel.send(embeds=embeds)
     except Exception as e:
         print(f"Errore auto: {e}")
+
 bot.run(TOKEN)

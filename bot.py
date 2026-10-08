@@ -1,12 +1,34 @@
-import discord, os, threading, json
+import discord, os, threading, json, asyncio
 from flask import Flask
-from deep_translator import GoogleTranslator
 from discord import app_commands
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-translator = GoogleTranslator(source='auto', target='it')
+# Traduttore senza limiti - usa MyMemory + fallback
+from deep_translator import MyMemoryTranslator, LingueeTranslator
 
-# File dove salva i canali con auto-traduzione attiva
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+def traduci_sicuro(testo):
+    # Prova MyMemory (gratis, 1000+ al giorno, no limite 5/sec)
+    try:
+        # MyMemory ha limite 5000 caratteri, spezziamo se serve
+        if len(testo) > 4000:
+            testo = testo[:4000]
+        result = MyMemoryTranslator(source='en-US', target='it-IT').translate(testo)
+        if result and "MYMEMORY WARNING" not in result and "QUERY LENGTH LIMIT" not in result:
+            return result
+    except Exception as e:
+        print(f"MyMemory fallito: {e}")
+
+    # Fallback 2: prova Google ma con delay
+    try:
+        from deep_translator import GoogleTranslator
+        import time
+        time.sleep(1.2)  # rispetta limite Google
+        return GoogleTranslator(source='auto', target='it').translate(testo[:4000])
+    except Exception as e:
+        print(f"Google fallback fallito: {e}")
+        return testo  # se tutto fallisce, ritorna originale
+
 FILE_CANALE = "canali_auto.json"
 
 def carica_canali():
@@ -46,12 +68,12 @@ async def on_ready():
     print(f"Bot online come {bot.user} - Auto attivi: {canali_auto}")
     try:
         synced = await bot.tree.sync()
-        print(f"Sincronizzati {len(synced)} comandi slash")
+        print(f"Sincronizzati {len(synced)} comandi")
     except Exception as e:
         print(f"Errore sync: {e}")
 
-async def traduci_testo(testo_originale, channel_name, embed_orig=None):
-    tradotto_text = translator.translate(testo_originale)
+async def crea_embed_tradotto(testo_originale, channel_name, embed_orig=None):
+    tradotto_text = traduci_sicuro(testo_originale)
     titolo = tradotto_text.split("\n\n")[0][:256] if "\n\n" in tradotto_text else tradotto_text[:256]
 
     nuovo_embed = discord.Embed(
@@ -69,16 +91,13 @@ async def traduci_testo(testo_originale, channel_name, embed_orig=None):
         embeds_finali.append(img_embed)
     return embeds_finali
 
-# --- SLASH /traduci = ATTIVA AUTO + TRADUCE ULTIMO ---
 @bot.tree.command(name="traduci", description="Attiva traduzione automatica in questo canale e traduce l'ultimo post")
 @app_commands.describe(testo="Testo opzionale da tradurre subito")
 async def traduci(interaction: discord.Interaction, testo: str = None):
     await interaction.response.defer()
-
-    # Attiva auto per questo canale
     canali_auto.add(interaction.channel.id)
     salva_canali(canali_auto)
-    print(f"Auto attivato in {interaction.channel.name} ({interaction.channel.id})")
+    print(f"Auto attivato in {interaction.channel.name}")
 
     testo_originale = ""
     embed_orig = None
@@ -104,32 +123,29 @@ async def traduci(interaction: discord.Interaction, testo: str = None):
                         break
 
         if not testo_originale.strip():
-            await interaction.followup.send(f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}! Da ora traduco tutto automaticamente qui. Scrivi `/traduci_stop` per fermare.", ephemeral=False)
+            await interaction.followup.send(f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}! Da ora traduco tutto automaticamente qui. Usa `/traduci_stop` per fermare.")
             return
 
-        embeds = await traduci_testo(testo_originale, interaction.channel.name, embed_orig)
-        await interaction.followup.send(content=f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}! Da ora in poi traduco tutto qui automaticamente.", embeds=embeds)
+        embeds = await crea_embed_tradotto(testo_originale, interaction.channel.name, embed_orig)
+        await interaction.followup.send(content=f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}! Ora è automatico qui.", embeds=embeds)
 
     except Exception as e:
         print(f"Errore /traduci: {e}")
-        await interaction.followup.send(f"✅ Auto attivata ma errore traduzione: {e}", ephemeral=True)
+        await interaction.followup.send(f"✅ Auto attivata, ma errore traduzione: {e}")
 
-# --- SLASH /traduci_stop = DISATTIVA AUTO ---
 @bot.tree.command(name="traduci_stop", description="Disattiva traduzione automatica in questo canale")
 async def traduci_stop(interaction: discord.Interaction):
     if interaction.channel.id in canali_auto:
         canali_auto.remove(interaction.channel.id)
         salva_canali(canali_auto)
-        await interaction.response.send_message(f"🛑 Auto-traduzione **DISATTIVATA** in {interaction.channel.mention}. Ora non traduco più automaticamente qui. Usa `/traduci` per riattivare.", ephemeral=False)
+        await interaction.response.send_message(f"🛑 Auto **DISATTIVATA** in {interaction.channel.mention}.")
     else:
-        await interaction.response.send_message("Questo canale non aveva l'auto-traduzione attiva.", ephemeral=True)
+        await interaction.response.send_message("Auto non era attiva qui.", ephemeral=True)
 
-# --- MESSAGGI AUTOMATICI NEI CANALI ATTIVATI ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-    # Traduci automaticamente solo se il canale è stato attivato con /traduci
     if message.channel.id not in canali_auto:
         return
     if not message.embeds and not message.content:
@@ -148,7 +164,9 @@ async def on_message(message):
         return
 
     try:
-        embeds = await traduci_testo(testo_originale, message.channel.name, embed_orig)
+        # Piccolo delay per non spammare Google
+        await asyncio.sleep(0.5)
+        embeds = await crea_embed_tradotto(testo_originale, message.channel.name, embed_orig)
         await message.channel.send(embeds=embeds)
     except Exception as e:
         print(f"Errore auto: {e}")

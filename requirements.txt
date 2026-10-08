@@ -1,4 +1,5 @@
-    discord.py
-    deep-translator
-    Flask
-    requests
+discord.py
+Flask
+requests
+deep-translator
+argostranslate

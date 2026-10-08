@@ -112,25 +112,43 @@ async def on_message(message):
                 return
     if message.channel.id not in auto_channels:
         return
-    # Estrae testo da content + embeds (per patch notes di DbD ecc)
-    orig = ""
+    # Estrae testo da content + embeds (per patch notes di DbD, WARDOGS, ecc)
+    parts_orig = []
     if message.content and message.content.strip():
-        orig = message.content.strip()
-    elif message.embeds:
-        # Prendi titolo + descrizione + fields dagli embed
-        parts = []
+        # Ignora messaggi di sistema "This channel will now receive..."
+        if "will now receive notifications for" not in message.content and "will no longer receive" not in message.content:
+            parts_orig.append(message.content.strip())
+        elif not message.embeds:
+            # Se è solo notifica senza embed, non tradurre (spam)
+            parts_orig.append(message.content.strip())
+    
+    if message.embeds:
         for emb in message.embeds:
             if emb.title:
-                parts.append(emb.title)
+                parts_orig.append(emb.title)
             if emb.description:
-                parts.append(emb.description)
+                parts_orig.append(emb.description)
             for f in emb.fields:
                 if f.name:
-                    parts.append(f.name)
+                    parts_orig.append(f.name)
                 if f.value:
-                    parts.append(f.value)
-        orig = "\n".join(parts).strip()
+                    parts_orig.append(f.value)
     
+    orig = "\n".join(parts_orig).strip()
+    # Filtra notifiche di sistema troppo corte
+    if "will now receive notifications for" in orig and len(orig) < 200:
+        # Se c'è solo la notifica sistema + embed, prendi solo embed
+        embed_only = []
+        for emb in message.embeds:
+            if emb.title:
+                embed_only.append(emb.title)
+            if emb.description:
+                embed_only.append(emb.description)
+            for f in emb.fields:
+                if f.value:
+                    embed_only.append(f.value)
+        if embed_only:
+            orig = "\n".join(embed_only).strip()
     if not orig or len(orig) < 2:
         return
     

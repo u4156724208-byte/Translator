@@ -20,13 +20,14 @@ def home():
             count = len(json.load(f))
     except:
         count = 0
-    # Controlla se Argos è pronto
+    # Modalità leggera: non serve Argos, siamo sempre PRONTO
     try:
         import argos_translate.translate
-        stato = "PRONTO ✅"
+        stato = "PRONTO ✅ (con Argos)"
     except:
-        stato = "PRONTO" if os.path.exists('/tmp/argos_done') else "Download in corso... ⏳ (1 min)"
-    return f"<h1>BLACKOUT Translator Online</h1><p>{stato} - {count} canali attivi</p><p>UptimeRobot: OK</p>"
+        # Se Argos non è installato, siamo in modalità leggera = sempre pronto
+        stato = "PRONTO ✅ LEGGERO - MyMemory + Google"
+    return f"BLACKOUT Translator Online - {stato} - {count} canali"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -119,24 +120,8 @@ auto_channels = load_auto()
 
 @client.event
 async def on_ready():
-    print(f"✅ Bot ONLINE: {client.user} | {len(auto_channels)} canali auto")
-    # Download Argos in background - NON blocca il bot
-    def download_argos():
-        try:
-            from argos_translate import package
-            print("🔍 Cerco pacchetto en->it...")
-            available = package.get_available_packages()
-            pkg = next((p for p in available if p.from_code=='en' and p.to_code=='it'), None)
-            if pkg:
-                print("⬇️ Download Argos en->it (30MB)...")
-                pkg.install()
-                open('/tmp/argos_done','w').write('ok')
-                print("✅ Argos PRONTO!")
-            else:
-                print("⚠️ Pacchetto Argos en->it non trovato online, uso fallback")
-        except Exception as e:
-            print(f"❌ Argos download error: {e}")
-    threading.Thread(target=download_argos, daemon=True).start()
+    print(f"✅ Bot ONLINE: {client.user} | {len(auto_channels)} canali auto | MODALITA' LEGGERA - PRONTO")
+    # Modalità leggera: niente download Argos, usa solo MyMemory + Google (80MB)
     
     try:
         synced = await tree.sync()

@@ -1,9 +1,9 @@
 import discord, os, threading
 from flask import Flask
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-translator = Translator()
+translator = GoogleTranslator(source='auto', target='it')
 
 app = Flask('')
 @app.route('/')
@@ -40,19 +40,23 @@ async def on_message(message):
         return
 
     try:
-        tradotto = await translator.translate(testo_originale, dest="it")
+        tradotto_text = translator.translate(testo_originale)
+        titolo = tradotto_text.split("\n\n")[0][:256]
+
         nuovo_embed = discord.Embed(
-            title=tradotto.text.split("\n\n")[0][:256],
-            description=tradotto.text,
+            title=titolo,
+            description=tradotto_text,
             color=0x00D9FF
         )
         nuovo_embed.set_author(name=f"Rockstar Games #{message.channel.name}")
         nuovo_embed.set_footer(text=f"Translated from #{message.channel.name} by BLACKOUT Translator")
+
         embeds_finali = [nuovo_embed]
         if embed_orig and embed_orig.image:
             img_embed = discord.Embed(color=0x00D9FF)
             img_embed.set_image(url=embed_orig.image.url)
             embeds_finali.append(img_embed)
+
         await message.channel.send(embeds=embeds_finali)
     except Exception as e:
         print(f"Errore: {e}")

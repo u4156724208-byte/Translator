@@ -94,13 +94,24 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    if message.author.bot:
+    # Ignora solo il nostro bot, NON i webhook di DbD/Rockstar (hanno author.bot=True)
+    if message.author.id == client.user.id if client.user else False:
         return
-    if message.channel.id not in auto_channels:
-        return
+    # Ignora solo il nostro bot
+    try:
+        if client.user and message.author.id == client.user.id:
+            return
+    except:
+        pass
+    # Evita loop con traduzioni nostre
     if "Translated from" in message.content:
         return
-    
+    if message.embeds:
+        for em in message.embeds:
+            if em.footer and em.footer.text and "BLACKOUT" in em.footer.text:
+                return
+    if message.channel.id not in auto_channels:
+        return
     # Estrae testo da content + embeds (per patch notes di DbD ecc)
     orig = ""
     if message.content and message.content.strip():

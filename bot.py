@@ -1,61 +1,36 @@
-import discord, os, threading, json, asyncio, requests
+import discord, os, threading, json, asyncio, requests, urllib.parse
 from flask import Flask
 from discord import app_commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-def traduci_libre(text):
-    """Usa LibreTranslate.de - gratis e senza limite 5/sec"""
+def traduci_google_diretto(text):
+    """Chiama l'API libera di translate.googleapis.com - funziona sempre"""
     try:
+        if not text or len(text.strip()) < 2:
+            return text
         if len(text) > 4000:
             text = text[:4000]
-        resp = requests.post(
-            "https://libretranslate.de/translate",
-            data={
-                "q": text,
-                "source": "en",
-                "target": "it",
-                "format": "text"
-            },
-            timeout=10
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            trad = data.get("translatedText", "")
-            if trad and trad.strip().lower() != text.strip().lower():
+        # Prova a non tradurre se e' gia italiano
+        q = urllib.parse.quote(text)
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=it&dt=t&q={q}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            # data[0] = lista di frammenti tradotti
+            trad = "".join([x[0] for x in data[0] if x[0]])
+            if trad and trad.strip():
                 return trad
     except Exception as e:
-        print(f"Libre de fallito: {e}")
-    
-    # Fallback 2: argosopentech
-    try:
-        resp = requests.post(
-            "https://translate.argosopentech.com/translate",
-            json={"q": text, "source": "en", "target": "it"},
-            timeout=10
-        )
-        if resp.status_code == 200:
-            trad = resp.json().get("translatedText", "")
-            if trad:
-                return trad
-    except Exception as e:
-        print(f"Argos fallito: {e}")
+        print(f"Google diretto fallito: {e}")
 
-    # Fallback 3: MyMemory
+    # Fallback MyMemory
     try:
         from deep_translator import MyMemoryTranslator
         return MyMemoryTranslator(source='en', target='it').translate(text[:4000])
     except Exception as e:
-        print(f"MyMemory fallito: {e}")
-
-    # Fallback 4: Google con delay
-    try:
-        from deep_translator import GoogleTranslator
-        import time
-        time.sleep(1)
-        return GoogleTranslator(source='auto', target='it').translate(text[:4000])
-    except Exception as e:
-        print(f"Google fallito: {e}")
+        print(f"MyMemory fallback fallito: {e}")
         return text
 
 FILE_CANALE = "canali_auto.json"
@@ -97,12 +72,13 @@ async def on_ready():
     print(f"Bot online {bot.user} - Auto: {canali_auto}")
     try:
         synced = await bot.tree.sync()
-        print(f"Sync {len(synced)} comandi")
+        print(f"Sync {len(synced)}")
     except Exception as e:
         print(f"Errore sync: {e}")
 
 async def crea_embed_tradotto(testo_originale, channel_name, embed_orig=None):
-    tradotto_text = traduci_libre(testo_originale)
+    tradotto_text = traduci_google_diretto(testo_originale)
+    print(f"TRADOTTO: {testo_originale[:50]} -> {tradotto_text[:50]}")
     titolo = tradotto_text.split("\n\n")[0][:256] if "\n\n" in tradotto_text else tradotto_text[:256]
     nuovo_embed = discord.Embed(title=titolo, description=tradotto_text, color=0x00D9FF)
     nuovo_embed.set_author(name=f"Rockstar Games #{channel_name}")
@@ -142,7 +118,7 @@ async def traduci(interaction: discord.Interaction, testo: str = None):
                         testo_originale = msg.content
                         break
         if not testo_originale.strip():
-            await interaction.followup.send(f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}! Da ora traduco tutto qui.")
+            await interaction.followup.send(f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}!")
             return
         embeds = await crea_embed_tradotto(testo_originale, interaction.channel.name, embed_orig)
         await interaction.followup.send(content=f"✅ Auto **ATTIVATA** in {interaction.channel.mention}!", embeds=embeds)

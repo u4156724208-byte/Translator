@@ -1,33 +1,62 @@
-import discord, os, threading, json, asyncio
+import discord, os, threading, json, asyncio, requests
 from flask import Flask
 from discord import app_commands
 
-# Traduttore senza limiti - usa MyMemory + fallback
-from deep_translator import MyMemoryTranslator, LingueeTranslator
-
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-def traduci_sicuro(testo):
-    # Prova MyMemory (gratis, 1000+ al giorno, no limite 5/sec)
+def traduci_libre(text):
+    """Usa LibreTranslate.de - gratis e senza limite 5/sec"""
     try:
-        # MyMemory ha limite 5000 caratteri, spezziamo se serve
-        if len(testo) > 4000:
-            testo = testo[:4000]
-        result = MyMemoryTranslator(source='en-US', target='it-IT').translate(testo)
-        if result and "MYMEMORY WARNING" not in result and "QUERY LENGTH LIMIT" not in result:
-            return result
+        if len(text) > 4000:
+            text = text[:4000]
+        resp = requests.post(
+            "https://libretranslate.de/translate",
+            data={
+                "q": text,
+                "source": "en",
+                "target": "it",
+                "format": "text"
+            },
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            trad = data.get("translatedText", "")
+            if trad and trad.strip().lower() != text.strip().lower():
+                return trad
+    except Exception as e:
+        print(f"Libre de fallito: {e}")
+    
+    # Fallback 2: argosopentech
+    try:
+        resp = requests.post(
+            "https://translate.argosopentech.com/translate",
+            json={"q": text, "source": "en", "target": "it"},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            trad = resp.json().get("translatedText", "")
+            if trad:
+                return trad
+    except Exception as e:
+        print(f"Argos fallito: {e}")
+
+    # Fallback 3: MyMemory
+    try:
+        from deep_translator import MyMemoryTranslator
+        return MyMemoryTranslator(source='en', target='it').translate(text[:4000])
     except Exception as e:
         print(f"MyMemory fallito: {e}")
 
-    # Fallback 2: prova Google ma con delay
+    # Fallback 4: Google con delay
     try:
         from deep_translator import GoogleTranslator
         import time
-        time.sleep(1.2)  # rispetta limite Google
-        return GoogleTranslator(source='auto', target='it').translate(testo[:4000])
+        time.sleep(1)
+        return GoogleTranslator(source='auto', target='it').translate(text[:4000])
     except Exception as e:
-        print(f"Google fallback fallito: {e}")
-        return testo  # se tutto fallisce, ritorna originale
+        print(f"Google fallito: {e}")
+        return text
 
 FILE_CANALE = "canali_auto.json"
 
@@ -65,25 +94,19 @@ bot = MyBot()
 
 @bot.event
 async def on_ready():
-    print(f"Bot online come {bot.user} - Auto attivi: {canali_auto}")
+    print(f"Bot online {bot.user} - Auto: {canali_auto}")
     try:
         synced = await bot.tree.sync()
-        print(f"Sincronizzati {len(synced)} comandi")
+        print(f"Sync {len(synced)} comandi")
     except Exception as e:
         print(f"Errore sync: {e}")
 
 async def crea_embed_tradotto(testo_originale, channel_name, embed_orig=None):
-    tradotto_text = traduci_sicuro(testo_originale)
+    tradotto_text = traduci_libre(testo_originale)
     titolo = tradotto_text.split("\n\n")[0][:256] if "\n\n" in tradotto_text else tradotto_text[:256]
-
-    nuovo_embed = discord.Embed(
-        title=titolo,
-        description=tradotto_text,
-        color=0x00D9FF
-    )
+    nuovo_embed = discord.Embed(title=titolo, description=tradotto_text, color=0x00D9FF)
     nuovo_embed.set_author(name=f"Rockstar Games #{channel_name}")
     nuovo_embed.set_footer(text=f"Translated from #{channel_name} by BLACKOUT Translator | /traduci_stop per fermare auto")
-
     embeds_finali = [nuovo_embed]
     if embed_orig and embed_orig.image:
         img_embed = discord.Embed(color=0x00D9FF)
@@ -97,11 +120,8 @@ async def traduci(interaction: discord.Interaction, testo: str = None):
     await interaction.response.defer()
     canali_auto.add(interaction.channel.id)
     salva_canali(canali_auto)
-    print(f"Auto attivato in {interaction.channel.name}")
-
     testo_originale = ""
     embed_orig = None
-
     try:
         if testo:
             testo_originale = testo
@@ -121,17 +141,14 @@ async def traduci(interaction: discord.Interaction, testo: str = None):
                     if len(msg.content) > 5:
                         testo_originale = msg.content
                         break
-
         if not testo_originale.strip():
-            await interaction.followup.send(f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}! Da ora traduco tutto automaticamente qui. Usa `/traduci_stop` per fermare.")
+            await interaction.followup.send(f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}! Da ora traduco tutto qui.")
             return
-
         embeds = await crea_embed_tradotto(testo_originale, interaction.channel.name, embed_orig)
-        await interaction.followup.send(content=f"✅ Auto-traduzione **ATTIVATA** in {interaction.channel.mention}! Ora è automatico qui.", embeds=embeds)
-
+        await interaction.followup.send(content=f"✅ Auto **ATTIVATA** in {interaction.channel.mention}!", embeds=embeds)
     except Exception as e:
         print(f"Errore /traduci: {e}")
-        await interaction.followup.send(f"✅ Auto attivata, ma errore traduzione: {e}")
+        await interaction.followup.send(f"Errore: {e}")
 
 @bot.tree.command(name="traduci_stop", description="Disattiva traduzione automatica in questo canale")
 async def traduci_stop(interaction: discord.Interaction):
@@ -150,7 +167,6 @@ async def on_message(message):
         return
     if not message.embeds and not message.content:
         return
-
     embed_orig = message.embeds[0] if message.embeds else None
     testo_originale = ""
     if embed_orig:
@@ -162,10 +178,8 @@ async def on_message(message):
         testo_originale = message.content
     if not testo_originale.strip():
         return
-
     try:
-        # Piccolo delay per non spammare Google
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
         embeds = await crea_embed_tradotto(testo_originale, message.channel.name, embed_orig)
         await message.channel.send(embeds=embeds)
     except Exception as e:

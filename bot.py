@@ -16,7 +16,7 @@ def home():
             count = len(json.load(f))
     except:
         count = 0
-    return f"BLACKOUT Translator Online - {count} canali - OK"
+    return f"BLACKOUT Translator Online - OFFLINE MODE - {count} canali - OK"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -31,16 +31,68 @@ EMERGENZA = {
     "thank you": "grazie",
 }
 
-def google_free_translate(text, target='it', source='en'):
-    """Traduttore diretto Google - funziona su Render"""
+# --- TRADUTTORE OFFLINE (Argos) ---
+argos_ready = False
+argos_from_en_to_it = None
+
+def init_argos():
+    global argos_ready, argos_from_en_to_it
+    try:
+        from argostranslate import package, translate
+        from_code, to_code = "en", "it"
+        # Controlla se già installato
+        installed = package.get_installed_packages()
+        has_en_it = any(p.from_code == from_code and p.to_code == to_code for p in installed)
+        if not has_en_it:
+            print("📥 Scarico modello Argos en->it (80MB) una tantum...")
+            available = package.get_available_packages()
+            avail = [p for p in available if p.from_code == from_code and p.to_code == to_code]
+            if avail:
+                pkg = avail[0]
+                path = pkg.download()
+                package.install_from_path(path)
+                print("✅ Modello Argos installato")
+        # Carica traduttore
+        from argostranslate.translate import get_translation_from_codes
+        argos_from_en_to_it = get_translation_from_codes(from_code, to_code)
+        argos_ready = True
+        print("✅ Argos OFFLINE pronto")
+    except Exception as e:
+        print(f"⚠️ Argos non pronto: {e}")
+        argos_ready = False
+
+# Prova a inizializzare all'avvio in background
+def init_argos_thread():
+    try:
+        init_argos()
+    except Exception as e:
+        print(f"Argos thread fail {e}")
+
+threading.Thread(target=init_argos_thread, daemon=True).start()
+
+def chunk_smart(text, max_len=380):
+    chunks = []
+    while len(text) > max_len:
+        cut = text.rfind(' ', 0, max_len)
+        if cut == -1:
+            cut = text.rfind('\n', 0, max_len)
+        if cut == -1:
+            cut = max_len
+        chunks.append(text[:cut].strip())
+        text = text[cut:].strip()
+    if text:
+        chunks.append(text)
+    return chunks
+
+def google_free_translate(text):
     try:
         url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client": "gtx", "sl": source, "tl": target, "dt": "t", "q": text[:4000]}
-        r = requests.get(url, params=params, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        params = {"client": "gtx", "sl": "en", "tl": "it", "dt": "t", "q": text}
+        r = requests.get(url, params=params, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code == 200:
             data = r.json()
-            if data and len(data) > 0 and isinstance(data[0], list):
-                translated = "".join([item[0] for item in data[0] if item and len(item) > 0 and item[0]])
+            if data and isinstance(data[0], list):
+                translated = "".join([item[0] for item in data[0] if item and len(item)>0 and item[0]])
                 if translated and translated.strip():
                     return translated
     except Exception as e:
@@ -53,48 +105,44 @@ def traduci_sync(text: str) -> str:
     low = text.strip().lower()
     if low in EMERGENZA:
         return EMERGENZA[low]
-    
-    # 1. Google diretto (piu stabile su Render)
-    try:
-        res = google_free_translate(text[:4000], 'it', 'en')
-        if res and res.strip() and res.lower() != low:
-            if "QUERY LENGTH" not in res.upper() and "MAX ALLOWED" not in res.upper():
+
+    # 1. OFFLINE Argos (garantito, no rate limit)
+    if argos_ready and argos_from_en_to_it:
+        try:
+            res = argos_from_en_to_it.translate(text)
+            if res and res.strip() and res.lower() != low:
                 return res
-    except Exception as e:
-        print(f"[GoogleFree fail] {e}")
-    
-    # 2. deep_translator Google
-    try:
-        from deep_translator import GoogleTranslator
-        result = GoogleTranslator(source='en', target='it').translate(text[:4000])
-        if result and result.strip() and result.lower() != low:
-            return result
-    except Exception as e:
-        print(f"[Google fail] {e}")
+        except Exception as e:
+            print(f"[Argos fail] {e}")
+
+    # 2. Google diretto
+    res = google_free_translate(text[:3500])
+    if res and res.strip() and res.lower() != low:
+        if res.lower().strip() != text.lower().strip():
+            return res
 
     # 3. MyMemory
     try:
-        q = text[:400]
-        r = requests.get("https://api.mymemory.translated.net/get", params={"q": q, "langpair": "en|it", "de": "blackout@translator.com"}, timeout=15)
+        r = requests.get("https://api.mymemory.translated.net/get",
+                         params={"q": text[:380], "langpair": "en|it", "de": "blackout@translator.com"},
+                         timeout=10)
         if r.status_code == 200:
             j = r.json()
             t = j.get("responseData", {}).get("translatedText")
-            if t:
-                up = t.upper()
-                if "QUERY LENGTH LIMIT EXCEEDED" not in up and "MAX ALLOWED QUERY" not in up and "MYMEMORY WARNING" not in up:
-                    if t.strip() and t.lower() != low:
-                        return t
+            if t and "QUERY LENGTH" not in t.upper() and "MYMEMORY WARNING" not in t.upper():
+                if t.strip().lower() != low:
+                    return t
     except Exception as e:
         print(f"[MyMemory fail] {e}")
 
-    # 4. Libre
+    # 4. deep_translator
     try:
-        from deep_translator import LibreTranslator
-        result = LibreTranslator(source='en', target='it').translate(text[:4000])
-        if result and result.lower() != low:
+        from deep_translator import GoogleTranslator
+        result = GoogleTranslator(source='en', target='it').translate(text[:3500])
+        if result and result.strip().lower() != low:
             return result
-    except Exception as e:
-        print(f"[Libre fail] {e}")
+    except:
+        pass
 
     return text
 
@@ -121,7 +169,7 @@ auto_channels = load_auto()
 
 @client.event
 async def on_ready():
-    print(f"Bot ONLINE {client.user} | {len(auto_channels)} canali")
+    print(f"Bot ONLINE {client.user} | {len(auto_channels)} canali | Argos={argos_ready}")
     try:
         synced = await tree.sync()
         print(f"Sync {len(synced)} comandi")
@@ -130,13 +178,11 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    # Ignora solo se stesso
     try:
         if client.user and message.author.id == client.user.id:
             return
     except:
         pass
-    # Evita loop traduzioni nostre
     if "Translated from" in (message.content or ""):
         return
     if message.embeds:
@@ -146,7 +192,6 @@ async def on_message(message):
     if message.channel.id not in auto_channels:
         return
 
-    # Unisce content + embed (fix WARDOGS)
     parts = []
     if message.content and message.content.strip():
         txt = message.content.strip()
@@ -160,18 +205,13 @@ async def on_message(message):
             if emb.description:
                 parts.append(emb.description)
             for f in emb.fields:
-                if f.name:
-                    parts.append(f.name)
                 if f.value:
                     parts.append(f.value)
     
     orig = "\n".join(parts).strip()
     if not orig or len(orig) < 3:
         return
-
-    # Se contiene ancora notifica sistema, filtra
     if "will now receive notifications for" in orig.lower() and len(orig) < 300:
-        # Prendi solo embed
         embed_only = []
         for emb in message.embeds:
             if emb.title:
@@ -184,9 +224,8 @@ async def on_message(message):
             return
 
     try:
-        print(f"[AUTO] Traduco #{message.channel.name}: {orig[:80]}")
-        if len(orig) > 400:
-            chunks = [orig[i:i+400] for i in range(0, len(orig), 400)]
+        if len(orig) > 380:
+            chunks = chunk_smart(orig, 380)
             trad_parts = [traduci_sync(c) for c in chunks]
             trad = "\n".join(trad_parts)
         else:
@@ -198,9 +237,6 @@ async def on_message(message):
             emb = discord.Embed(description=f"**{trad}**", color=0x00ffcc)
             emb.set_footer(text=f"Translated from #{message.channel.name} by BLACKOUT | /traduci_stop per fermare")
             await message.channel.send(embed=emb)
-            print(f"[AUTO] Inviata traduzione!")
-        else:
-            print(f"[AUTO] Traduzione uguale all'originale, skip")
     except Exception as e:
         print(f"[AUTO] Errore: {e}")
 
@@ -214,8 +250,8 @@ async def traduci(interaction: discord.Interaction, testo: str = None):
             save_auto(auto_channels)
             await interaction.followup.send(f"✅ Auto ATTIVATA in <#{interaction.channel.id}>! Usa /traduci_stop per fermare.", ephemeral=True)
             return
-        if len(testo) > 400:
-            chunks = [testo[i:i+400] for i in range(0, len(testo), 400)]
+        if len(testo) > 380:
+            chunks = chunk_smart(testo, 380)
             finale = "\n".join([await asyncio.to_thread(traduci_sync, c) for c in chunks])
         else:
             finale = await asyncio.to_thread(traduci_sync, testo)
@@ -242,7 +278,6 @@ if not TOKEN:
         time.sleep(3600)
 else:
     try:
-        print(f"🚀 Avvio bot...")
         client.run(TOKEN)
     except Exception as e:
         print(f"❌ ERRORE: {e}")
